@@ -1,0 +1,6 @@
+.env
+duffel_debug.txt
+*.db
+__pycache__/
+*.pyc
+venv/
