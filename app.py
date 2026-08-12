@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sqlite3
 import traceback
 from datetime import datetime
@@ -115,7 +116,7 @@ SEARCH_MODAL = {
             "element": {
                 "type": "plain_text_input",
                 "action_id": "from_location",
-                "placeholder": {"type": "plain_text", "text": "e.g. JFK"},
+                "placeholder": {"type": "plain_text", "text": "City or airport, e.g. San Francisco or SFO"},
             },
             "label": {"type": "plain_text", "text": "From (airport or city)", "emoji": True},
         },
@@ -125,7 +126,7 @@ SEARCH_MODAL = {
             "element": {
                 "type": "plain_text_input",
                 "action_id": "to_location",
-                "placeholder": {"type": "plain_text", "text": "e.g. LAX"},
+                "placeholder": {"type": "plain_text", "text": "City or airport, e.g. San Francisco or SFO"},
             },
             "label": {"type": "plain_text", "text": "To (airport or city)", "emoji": True},
         },
@@ -209,6 +210,58 @@ def search_duffel_offers(origin, destination, departure_date):
 
 def get_safe(value, default=""):
     return value if value is not None else default
+
+
+def get_duffel_headers(content_type=True):
+    headers = {
+        "Authorization": f"Bearer {DUFFEL_API_KEY}",
+        "Duffel-Version": "v2",
+        "Accept": "application/json",
+    }
+    if content_type:
+        headers["Content-Type"] = "application/json"
+    return headers
+
+
+def normalize_iata_input(text):
+    if not text:
+        return None
+    normalized = text.strip()
+    if re.fullmatch(r"[A-Za-z]{3}", normalized):
+        return normalized.upper()
+    return None
+
+
+def resolve_location_to_iata(location_text):
+    code = normalize_iata_input(location_text)
+    if code:
+        return code
+
+    url = "https://api.duffel.com/places/suggestions"
+    params = {"query": location_text}
+    response = requests.get(url, headers=get_duffel_headers(content_type=False), params=params, timeout=30)
+    print("DUFFEL suggestions status:", response.status_code)
+    print("DUFFEL suggestions body:", response.text)
+    response.raise_for_status()
+    body = response.json()
+    for place in body.get("data", []):
+        iata_code = place.get("iata_code")
+        if iata_code:
+            return iata_code
+    return None
+
+
+def format_location_display(original_text, resolved_code):
+    if not resolved_code:
+        return original_text or ""
+    if not original_text:
+        return resolved_code
+    original = original_text.strip()
+    if re.fullmatch(r"[A-Za-z]{3}", original) and original.upper() == resolved_code.upper():
+        return resolved_code
+    if original.upper() == resolved_code.upper():
+        return resolved_code
+    return f"{original} ({resolved_code})"
 
 
 def build_offer_blocks(offer, passenger_name=""):
@@ -328,14 +381,37 @@ def handle_travel_modal_submission(ack, body, client):
     time_preference = values["time_block"]["time_preference"]["selected_option"]["value"]
     channel_id = body["view"]["private_metadata"]
 
+    resolved_origin = resolve_location_to_iata(from_location)
+    resolved_destination = resolve_location_to_iata(to_location)
+
+    if not resolved_origin:
+        client.chat_postMessage(
+            channel=channel_id,
+            text=(
+                f"Couldn't find an airport for '{from_location}' — try a nearby major city or the airport code."
+            ),
+        )
+        return
+
+    if not resolved_destination:
+        client.chat_postMessage(
+            channel=channel_id,
+            text=(
+                f"Couldn't find an airport for '{to_location}' — try a nearby major city or the airport code."
+            ),
+        )
+        return
+
+    from_display = format_location_display(from_location, resolved_origin)
+    to_display = format_location_display(to_location, resolved_destination)
     search_text = (
-        f"Got it — searching flights for {passenger_name} from {from_location} to {to_location} "
+        f"Got it — searching flights for {passenger_name} from {from_display} to {to_display} "
         f"on {travel_date}, {time_preference}."
     )
     client.chat_postMessage(channel=channel_id, text=search_text)
 
     try:
-        offers = search_duffel_offers(from_location, to_location, travel_date)
+        offers = search_duffel_offers(resolved_origin, resolved_destination, travel_date)
         print("OFFER owners:", [o.get("owner", {}).get("iata_code") for o in offers])
         united_offers = [
             offer for offer in offers if offer.get("owner", {}).get("iata_code") == "UA"
