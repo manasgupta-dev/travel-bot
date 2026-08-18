@@ -1,6 +1,9 @@
 .env
-duffel_debug.txt
-*.db
 __pycache__/
 *.pyc
-venv/
+linear_store.db
+duffel_debug.txt
+cloudflared
+cloudflared.tgz
+*.tgz
+mappings.json

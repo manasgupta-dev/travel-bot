@@ -28,17 +28,26 @@ DB_CONN.execute(
          offer_id TEXT PRIMARY KEY,
          linear_issue_id TEXT,
          issue_title TEXT,
-         created_at TEXT
+         created_at TEXT,
+         slack_channel TEXT,
+         slack_user TEXT
     )"""
 )
+# add the new columns to any pre-existing DB
+for _col in ("slack_channel", "slack_user"):
+    try:
+        DB_CONN.execute(f"ALTER TABLE linear_issue_mappings ADD COLUMN {_col} TEXT")
+    except sqlite3.OperationalError:
+        pass
 DB_CONN.commit()
 
 
-def store_linear_issue_mapping(offer_id, linear_issue_id, issue_title):
+def store_linear_issue_mapping(offer_id, linear_issue_id, issue_title, slack_channel=None, slack_user=None):
     DB_CONN.execute(
-        "INSERT OR REPLACE INTO linear_issue_mappings (offer_id, linear_issue_id, issue_title, created_at) "
-        "VALUES (?, ?, ?, datetime('now'))",
-        (offer_id, linear_issue_id, issue_title),
+        "INSERT OR REPLACE INTO linear_issue_mappings "
+        "(offer_id, linear_issue_id, issue_title, created_at, slack_channel, slack_user) "
+        "VALUES (?, ?, ?, datetime('now'), ?, ?)",
+        (offer_id, linear_issue_id, issue_title, slack_channel, slack_user),
     )
     DB_CONN.commit()
 
@@ -479,7 +488,11 @@ def handle_select_offer(ack, body, client):
         issue = create_linear_issue(issue_title, issue_description, team_id)
         created_issue_id = issue.get("id")
         created_issue_title = issue.get("title", issue_title)
-        store_linear_issue_mapping(offer_id, created_issue_id, created_issue_title)
+        selecting_user = body.get("user", {}).get("id")
+        store_linear_issue_mapping(
+            offer_id, created_issue_id, created_issue_title,
+            slack_channel=channel_id, slack_user=selecting_user,
+        )
 
         united_link = f"https://www.united.com/en/us/book-flight/united-one-way?f={origin}&t={destination}&d={date}"
         if channel_id:
