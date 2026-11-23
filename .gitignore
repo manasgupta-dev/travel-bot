@@ -7,3 +7,4 @@ cloudflared
 cloudflared.tgz
 *.tgz
 mappings.json
+Claude outputs/
